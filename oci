@@ -385,18 +385,18 @@ echo "🛈 Migrate ${CT_SOURCE_ID}"
     echo "🛇 Container ${CT_SOURCE_ID} does not exist."; exit 3
   fi
 
-  if ha-manager status | grep -q "ct:${CT_ID}"; then
+  if ha-manager status | grep -q "ct:${CT_SOURCE_ID}"; then
       echo "➔ Set HA:${CT_SOURCE_ID} state=stopped"
       ha-manager set "ct:${CT_SOURCE_ID}" --state stopped
-
-      echo "➔ Waiting for container to stop..."
-      while pct status "${CT_SOURCE_ID}" 2>/dev/null | grep -q "status: running"; do
-        sleep 2
-      done
   elif pct status "${CT_SOURCE_ID}" 2>/dev/null | grep -q "status: running"; then
-      echo "➔ Stopping ${CT_SOURCE_ID}..."
+      echo "➔ Stopping ${CT_SOURCE_ID}"
       pct stop "${CT_SOURCE_ID}"
   fi
+
+  echo "➔ Waiting for container to stop..."
+  while pct status "${CT_SOURCE_ID}" 2>/dev/null | grep -q "status: running"; do
+      sleep 2
+  done
 
   echo "➔ Create ${CT_ID}"
   prompt pct create "${CT_ID}" "${OCI_NAME}" "${PCT_OPTIONS[@]}"
