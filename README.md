@@ -20,8 +20,8 @@ Configured proxmox cluster. Script should be placed in user path.
 ``` bash
 # Basic create usage. Create a seerr container with a static IP, firewall, and
 # 1G config disk. Additional mount points can be added after initial creation.
-# Environment options for OCI should be added post creation if needed -- use
-# --no-start.
+# Environment options for OCI should be added post creation if needed (use
+# --no-start).
 oci create \
   --enable-ha \
   --oci ghcr.io/seerr-team/seerr \
@@ -36,7 +36,8 @@ oci create \
   --datafs-backup
 
 # Basic migrate usage. Migrate an existing OCI container to a new version. All
-# mount points are automatically migrated to the new container.
+# mount points are automatically migrated to the new container. Environment
+# options for OCI should be added post creation if needed (use --no-start).
 oci migrate \
   --enable-ha \
   --oci ghcr.io/seerr-team/seerr \

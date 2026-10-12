@@ -38,6 +38,7 @@ CT_NET_BRIDGE="${CT_NET_BRIDGE:-vmbr0}"
 CT_NET_IP="${CT_NET_IP:-dhcp}"
 CT_NET_GW="${CT_NET_GW:-}"
 CT_NET_FIREWALL="${CT_NET_FIREWALL:-0}"
+CT_NET_FIREWALL_RULES=()
 CT_NET_HWADDR="${CT_NET_HWADDR:-}"
 CT_NET_VLAN="${CT_NET_VLAN:-}"
 CT_NET_TYPE="${CT_NET_TYPE:-veth}"
@@ -48,7 +49,6 @@ CT_DFS_MP=${CT_DFS_MP:-0}
 CT_DFS_MOUNT="${CT_DFS_MOUNT:-/app/config}"
 CT_DFS_BACKUP=${CT_DFS_BACKUP:-0}
 CT_DFS_OPTS="${CT_DFS_OPTS:-discard;noatime}"
-CT_FW_RULES=()
 
 USAGE="
 Usage: $(basename "$0") [options]
@@ -89,14 +89,14 @@ Options:
     -xni, --x-net-ip                    CIDR IP (default '${CT_NET_IP}')
     -xng, --x-net-gw                    Gateway (default '${CT_NET_GW}')
     -xfw, --x-net-firewall              Enable firewall
-    -xfr, --x-net-firewall-rule RULE    Specify multiple ingress firewall rules (default '${CT_FW_RULES[*]:-}')
+    -xfr, --x-net-firewall-rule RULE    Specify multiple ingress firewall rules (default '${CT_NET_FIREWALL_RULES[*]:-}')
                                         RULE: dport[]:proto[tcp]:source[]:log[nolog]:comment[]
                                         all separators required, defaults [] are used if blank.
 
-                                        -nfr '6246:tcp::nolog:All connections to tcp/6246'
-                                        -nfr '22:tcp:192.168.1.10:log:Single host to SSH'
-                                        -nfr '80:tcp:192.168.1.50,10.0.0.0/24:nolog:Allow multiple sources'
-                                        -nfr 443:tcp::log:https
+                                        -xfr '6246:tcp::nolog:All connections to tcp/6246'
+                                        -xfr '22:tcp:192.168.1.10:log:Single host to SSH'
+                                        -xfr '80:tcp:192.168.1.50,10.0.0.0/24:nolog:Allow multiple sources'
+                                        -xfr 443:tcp::log:https
     -xnh, --x-net-hwaddr                MAC address (default '${CT_NET_HWADDR}')
     -xnv, --x-net-vlan                  VLAN Tag (default '${CT_NET_VLAN}')
 
@@ -118,9 +118,6 @@ Options:
     -do,  --datafs-opts OPTS            Data FS mount options (default '${CT_DFS_OPTS}')
                                         --datafs-opts 'discard;noatime'
     -db,  --datafs-backup               Enable Data FS backup
-
-Examples:
-
 
 See: https://pve.proxmox.com/wiki/Manual:_pct.conf
 "
@@ -154,7 +151,7 @@ Create Seerr OCI with static IP and minimum customization.
     --x-hostname iseerr
 
 
-Create Seerr OCI customization container options and firewall rules.
+Create Seerr OCI customized container options and firewall rules.
 
   oci create \\
     --no-start \\
@@ -276,7 +273,7 @@ while [[ $# -gt 0 ]]; do
     -xni|--x-net-ip) CT_NET_IP="${2}"; shift 2;;
     -xng|--x-net-gw) CT_NET_GW="${2}"; shift 2;;
     -xfw|--x-net-firewall) CT_NET_FIREWALL=1; shift ;;
-    -xfr|--x-net-firewall-rule) CT_FW_RULES+=("${2}"); shift 2 ;;
+    -xfr|--x-net-firewall-rule) CT_NET_FIREWALL_RULES+=("${2}"); shift 2 ;;
     -xnh|--x-net-hwaddr) CT_NET_HWADDR="${2}"; shift 2 ;;
     -xnv|--x-net-vlan) CT_NET_VLAN="${2}"; shift 2;;
 
@@ -339,7 +336,7 @@ PCT_RFS_OPTS="${CT_RFS_STORAGE}:${CT_RFS_SIZE}"
 [ -n "${CT_RFS_OPTS}" ]   && PCT_RFS_OPTS+=",mountoptions=${CT_RFS_OPTS}"
 
 # Network.
-[ ${#CT_FW_RULES[@]} -gt 0 ] && CT_NET_FIREWALL=1
+[ ${#CT_NET_FIREWALL_RULES[@]} -gt 0 ] && CT_NET_FIREWALL=1
 PCT_NET="name=${CT_NET_NAME},bridge=${CT_NET_BRIDGE}"
 [ -n "${CT_NET_TYPE}" ]         && PCT_NET+=",type=${CT_NET_TYPE}"
 [ -n "${CT_NET_IP}" ]           && PCT_NET+=",ip=${CT_NET_IP}"
@@ -419,11 +416,11 @@ echo "🛈 Migrate ${CT_SOURCE_ID}"
 fi
 
 # Configure container firewall rules.
-if [ ${#CT_FW_RULES[@]} -gt 0 ]; then
+if [ ${#CT_NET_FIREWALL_RULES[@]} -gt 0 ]; then
   echo "🛈 Add firewall rules ${CT_ID}"
   pvesh set "/nodes/${NODE}/lxc/${CT_ID}/firewall/options" --enable 1
 
-  for rule in "${CT_FW_RULES[@]}"; do
+  for rule in "${CT_NET_FIREWALL_RULES[@]}"; do
     IFS=':' read -r dport proto_v source_v log_v comment_v <<< "${rule}"
     proto="${proto_v:-tcp}"
     source="${source_v:-}"
