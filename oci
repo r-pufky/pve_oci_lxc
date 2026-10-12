@@ -2,18 +2,21 @@
 set -euo pipefail
 
 CREATE_FLAG=0
-UPGRADE_FLAG=0
+MIGRATE_FLAG=0
+EXAMPLES_FLAG=0
+CONFIRM_FLAG=0
 HA_FLAG=0
 NO_ROOT_FLAG=0
+NO_START_FLAG=0
 
 # PVE defaults.
-STORAGE="${STORAGE:-local}"
-NODE="${NODE:-$(hostname)}"
+NODE="${NODE:-localhost}"
 
 # OCI image defaults.
 OCI_URL="${OCI_URL:-ghcr.io/seerr-team/seerr}"
 OCI_OS_TYPE="${OCI_OS_TYPE:-alpine}"
 OCI_VERSION="${OCI_VERSION:-latest}"
+OCI_STORAGE="${OCI_STORAGE:-local-lvm}"
 
 # Container defaults.
 CT_ID="${CT_ID:-999}"
@@ -21,7 +24,6 @@ CT_ID="${CT_ID:-999}"
 CT_RFS_STORAGE="${CT_RFS_STORAGE:-local-lvm}"
 CT_RFS_SIZE=${CT_RFS_SIZE:-4}
 CT_RFS_OPTS="${CT_RFS_OPTS:-discard;noatime}"
-CT_RFS_BACKUP=${CT_RFS_BACKUP:-0}
 
 CT_HOSTNAME="${CT_HOSTNAME:-${CT_ID}}"
 CT_CORES="${CT_CORES:-4}"
@@ -42,226 +44,309 @@ CT_NET_TYPE="${CT_NET_TYPE:-veth}"
 
 CT_DFS_STORAGE="${CT_DFS_STORAGE:-local-lvm}"
 CT_DFS_SIZE=${CT_DFS_SIZE:-0}
-CT_DFS_NODE=${CT_DFS_NODE:-0}
-CT_DFS_MP="${CT_DFS_MP:-/app/config}"
+CT_DFS_MP=${CT_DFS_MP:-0}
+CT_DFS_MOUNT="${CT_DFS_MOUNT:-/app/config}"
 CT_DFS_BACKUP=${CT_DFS_BACKUP:-0}
 CT_DFS_OPTS="${CT_DFS_OPTS:-discard;noatime}"
+CT_FW_RULES=()
 
 USAGE="
 Usage: $(basename "$0") [options]
 
 Manage OCI Image as LXC Containers (PVE 9.1+ preview). Containers are ALWAYS
-created as unprivileged and nested.
+created as unprivileged and nested. Supports both HA and non-HA.
 
 Options:
-  create         Create OCI container. Specify data disk if required.
-  upgrade        Create OCI container and migrate existing mount points.
-  -h,  --help    Display this help message.
+  create OPTS     Create OCI container. Specify data disk if required.
+  migrate OPTS    Migrate OCI container. Create new OCI container with options
+                  and migrate mount points (mp#) to new container. Destroy original.
+  examples        Display expanded example commands.
 
   All Commands:
-    -s,  --storage NAME            Proxmox template storage location (default: ${STORAGE}).
-         --no-root                 Run script as current user.
-    -ou, --oci URL                 OCI source URL (default: ${OCI_URL}).
-    -ot, --oci-type TYPE           OCI container ostype (default: ${OCI_OS_TYPE}).
-    -ov, --oci-version OCI_VERSION OCI container version (default: ${OCI_VERSION}).
-    -i,  --id ID                   Container ID (default: ${CT_ID}).
-         --enable-ha               Add created container to HA.
-    -n,  --node NAME               Create container on Proxmox node (default: ${HOSTNAME}).
-    -rs, --rootfs-storage NAME     Root FS storage location (default: ${CT_RFS_STORAGE}).
-    -rz, --rootfs-size SIZE        Root FS size in GB (default: ${CT_RFS_SIZE}).
-    -ro, --rootfs-opts OPTS        Root FS mountoptions (default: ${CT_RFS_OPTS}).
+    -h,   --help                        Display this help message
+    -nr,  --no-root                     Run script as current user
+    -ns,  --no-start                    Do NOT start OCI container after creation
+    -eh,  --enable-ha                   Add created container to HA
+    -c,   --confirm                     Manually confirm creation and destructive actions
 
-           --rootfs-opts discard,noatime
+    -ou,  --oci URL                     OCI source URL (default '${OCI_URL}')
+    -ot,  --oci-type TYPE               OCI container ostype (default '${OCI_OS_TYPE}')
+    -ov,  --oci-version OCI_VERSION     OCI container version (default '${OCI_VERSION}')
+    -os,  --oci-storage NAME            OCI template storage location (default '${OCI_STORAGE}')
+    -i,   --id ID                       Use next available ID starting from ID (default ${CT_ID})
+    -n,   --node IP/HOSTNAME            Create container on Proxmox node (default '${NODE}')
+                                        Hostnames must resolve or pvesh will produce an SSH
+                                        connection error. Prefer IP.
 
-         --rootfs-backup           Enable Root FS backup.
+    -rs,  --rootfs-storage NAME         Root FS storage location (default '${CT_RFS_STORAGE}')
+    -rz,  --rootfs-size SIZE            Root FS size in GB (default ${CT_RFS_SIZE})
+    -ro,  --rootfs-opts OPTS            Root FS mount options (default '${CT_RFS_OPTS}')
+                                        --rootfs-opts 'discard;noatime'
 
-    -nn, --x-net-name              Adaptor name (default: ${CT_NET_NAME}).
-    -nt, --x-net-type              Adaptor type (default: ${CT_NET_TYPE}).
-    -nb, --x-net-bridge            Bridge (default: ${CT_NET_BRIDGE}).
-    -ni, --x-net-ip                IP (CIDR, default: ${CT_NET_IP}).
-    -ng, --x-net-gw                Gateway (default: ${CT_NET_GW}).
-         --x-net-firewall          Enable firewall.
-    -nh, --x-net-hwaddr            MAC address (default: ${CT_NET_HWADDR}).
-    -nv, --x-net-vlan              VLAN Tag (default: ${CT_NET_VLAN}).
+    -xnn, --x-net-name                  Adaptor name (default '${CT_NET_NAME}')
+    -xnt, --x-net-type                  Adaptor type (default '${CT_NET_TYPE}')
+    -xnb, --x-net-bridge                Bridge (default '${CT_NET_BRIDGE}')
+    -xni, --x-net-ip                    CIDR IP (default '${CT_NET_IP}')
+    -xng, --x-net-gw                    Gateway (default '${CT_NET_GW}')
+    -xfw, --x-net-firewall              Enable firewall
+    -xfr, --x-net-firewall-rule RULE    Specify multiple ingress firewall rules (default '${CT_FW_RULES[*]:-}')
+                                        RULE: dport[]:proto[tcp]:source[]:log[nolog]:comment[]
+                                        all separators required, defaults [] are used if blank.
 
-    -xh, --x-hostname NAME         Hostname (default: ${CT_HOSTNAME}).
-    -xc, --x-cores NUM             Number of CPU cores (default: ${CT_CORES}).
-    -xm, --x-mem NUM               RAM in MB (default: ${CT_MEM}).
-    -xs, --x-swap NUM              SWAP in MB (default: ${CT_SWAP}).
-         --x-onboot                Enable startup on boot.
-    -xt, --x-tags TAG,TAG,TAG      Container tags (default: ${CT_TAGS}).
-    -xo, --x-startup OPTS          Startup options (default: ${CT_STARTUP}).
-           OPTS: order=#[,up=#][,down=#]
+                                        -nfr '6246:tcp::nolog:All connections to tcp/6246'
+                                        -nfr '22:tcp:192.168.1.10:log:Single host to SSH'
+                                        -nfr '80:tcp:192.168.1.50,10.0.0.0/24:nolog:Allow multiple sources'
+                                        -nfr 443:tcp::log:https
+    -xnh, --x-net-hwaddr                MAC address (default '${CT_NET_HWADDR}')
+    -xnv, --x-net-vlan                  VLAN Tag (default '${CT_NET_VLAN}')
 
-           --x-startup order=2000,up=2,down=3
+    -xh,  --x-hostname NAME             Hostname (default '${CT_HOSTNAME}')
+    -xc,  --x-cores NUM                 Number of CPU cores (default '${CT_CORES}')
+    -xm,  --x-mem NUM                   RAM in MB (default '${CT_MEM}')
+    -xs,  --x-swap NUM                  SWAP in MB (default '${CT_SWAP}')
+    -xb,  --x-onboot                    Enable startup on boot
+    -xt,  --x-tags TAG,TAG,TAG          Container tags (default '${CT_TAGS}')
+    -xo,  --x-startup OPTS              Startup options (default '${CT_STARTUP}')
+                                        OPTS: order=#[,up=#][,down=#]
+                                        --x-startup order=2000,up=2,down=3
 
   Create:
-    -ds, --datafs-storage NAME     Data FS storage location (default: ${CT_DFS_STORAGE}).
-    -dn, --datafs-node MP#         Data FS mountpoint node (default: ${CT_DFS_NODE}).
-    -dz, --datafs-size SIZE        Data FS size in GB (0 disables, default: ${CT_DFS_SIZE}).
-    -dm, --datafs-mount MOUNT      Data FS mountpoint (default: ${CT_DFS_MP}).
-    -do, --datafs-opts OPTS        Data FS mountoptions (default: ${CT_DFS_OPTS}).
-
-           --datafs-opts discard,noatime
-
-         --datafs-backup           Enable Data FS backup.
+    -ds,  --datafs-storage NAME         Data FS storage location (default '${CT_DFS_STORAGE}')
+    -dp,  --datafs-mp MP#               Data FS mount point node (default ${CT_DFS_MP})
+    -dz,  --datafs-size SIZE            Data FS size in GB (0 disables, default ${CT_DFS_SIZE})
+    -dm,  --datafs-mount MOUNT          Data FS mountpoint (default '${CT_DFS_MOUNT}')
+    -do,  --datafs-opts OPTS            Data FS mount options (default '${CT_DFS_OPTS}')
+                                        --datafs-opts 'discard;noatime'
+    -db,  --datafs-backup               Enable Data FS backup
 
 Examples:
-  Create a new Seerr OCI container with a 1G config disk.
 
-    oci create \\
-      --oci ghcr.io/seerr-team/seerr \\
-      --oci-version v3.0.0 \\
-      --id 700 \\
-      --enable-ha \\
-      --node pve2 \\
-      --rootfs-size 4 \\
-      --rootfs-opts discard,noatime \\
-      --rooffs-backup \\
-      --x-net-name eth0 \\
-      --x-net-type veth \\
-      --x-net-bridge vmrb0 \\
-      --x-net-ip 192.168.10.10/24 \\
-      --x-net-gw 192.168.10.1 \\
-      --x-net-firewall \\
-      --x-net-hwaddr 02:DD:CE:26:9A:1E \\
-      --x-net-vlan 5 \\
-      --x-hostname iseerr \\
-      --x-cores 4 \\
-      --x-mem 4096 \\
-      --x-onboot \\
-      --x-tags oci \\
-      --x-startup order=2000 \\
-      --datafs-storage local-lvm \\
-      --datafs-size 1 \\
-      --datafs-mount 0 \\
-      --datafs-opts discard,noatime \\
-      --datafs-backup
-
-  Migrate Seerr OCI container to new version (container re-created and migrate
-  all mp's to new container).
-
-    oci migrate \\
-      --oci ghcr.io/seerr-team/seerr \\
-      --oci-version v3.5.0 \\  # New version to use.
-      --id 700 \\  # Use existing container ID.
-      --enable-ha \\
-      --node pve2 \\
-      --rootfs-size 4 \\
-      --rootfs-opts discard,noatime \\
-      --rooffs-backup \\
-      --x-net-name eth0 \\
-      --x-net-type veth \\
-      --x-net-bridge vmrb0 \\
-      --x-net-ip 192.168.10.10/24 \\
-      --x-net-gw 192.168.10.1 \\
-      --x-net-firewall \\
-      --x-net-hwaddr 02:DD:CE:26:9A:1E \\
-      --x-net-vlan 5 \\
-      --x-hostname iseerr \\
-      --x-cores 4 \\
-      --x-mem 4096 \\
-      --x-onboot \\
-      --x-tags oci \\
-      --x-startup order=2000
 
 See: https://pve.proxmox.com/wiki/Manual:_pct.conf
 "
+EXAMPLES="
+
+Create Seerr OCI with static IP and minimum customization.
+
+  oci create \\
+    --enable-ha \\
+    --oci ghcr.io/seerr-team/seerr \\
+    --oci-version v3.4.0 \\
+    --x-net-ip 192.168.10.10/24 \\
+    --x-net-gw 192.168.10.1 \\
+    --x-net-firewall \\
+    --x-net-firewall-rule 5055:tcp::nolog:seerr \\
+    --x-hostname iseerr \\
+    --datafs-size 1 \\
+    --datafs-mount /app/config \\
+    --datafs-backup
+
+  Migrate existing host to a new release.
+
+  oci migrate \\
+    --enable-ha \\
+    --oci ghcr.io/seerr-team/seerr \\
+    --oci-version v3.5.0 \\
+    --x-net-ip 192.168.10.10/24 \\
+    --x-net-gw 192.168.10.1 \\
+    --x-net-firewall \\
+    --x-net-firewall-rule 5055:tcp::nolog:seerr \\
+    --x-hostname iseerr
+
+
+Create Seerr OCI customization container options and firewall rules.
+
+  oci create \\
+    --no-start \\
+    --enable-ha \\
+    --oci ghcr.io/seerr-team/seerr \\
+    --oci-type alpine \\
+    --oci-version v3.0.0 \\
+    --oci-storage pve \\
+    --id 700 \\
+    --rootfs-storage pve \\
+    --rootfs-size 4 \\
+    --rootfs-opts discard;noatime \\
+    --x-net-name eth0 \\
+    --x-net-type veth \\
+    --x-net-bridge vmbr0 \\
+    --x-net-ip 192.168.10.10/24 \\
+    --x-net-gw 192.168.10.1 \\
+    --x-net-firewall \\
+    --x-net-firewall-rule 5055:tcp:192.168.1.10,192.168.1.11:nolog:seerr \\
+    --x-net-firewall-rule 22:tcp:192.168.1.10:log:SSH \\
+    --x-net-hwaddr 02:DD:CE:26:9A:1E \\
+    --x-net-vlan 5 \\
+    --x-hostname iseerr \\
+    --x-cores 4 \\
+    --x-mem 4096 \\
+    --x-onboot \\
+    --x-tags oci \\
+    --x-startup order=2000 \\
+    --datafs-storage local-lvm \\
+    --datafs-mp 0 \\
+    --datafs-size 1 \\
+    --datafs-mount /app/config \\
+    --datafs-opts discard;noatime \\
+    --datafs-backup
+
+  Migrate existing host to a new release.
+
+  oci migrate \\
+    --no-start \\
+    --enable-ha \\
+    --oci ghcr.io/seerr-team/seerr \\
+    --oci-type alpine \\
+    --oci-version v3.0.0 \\
+    --oci-storage pve \\
+    --id 700 \\
+    --rootfs-storage pve \\
+    --rootfs-size 4 \\
+    --rootfs-opts discard;noatime \\
+    --x-net-name eth0 \\
+    --x-net-type veth \\
+    --x-net-bridge vmbr0 \\
+    --x-net-ip 192.168.10.10/24 \\
+    --x-net-gw 192.168.10.1 \\
+    --x-net-firewall \\
+    --x-net-firewall-rule 5055:tcp:192.168.1.10,192.168.1.11:nolog:seerr \\
+    --x-net-firewall-rule 22:tcp:192.168.1.10:log:SSH \\
+    --x-net-hwaddr 02:DD:CE:26:9A:1E \\
+    --x-net-vlan 5 \\
+    --x-hostname iseerr \\
+    --x-cores 4 \\
+    --x-mem 4096 \\
+    --x-onboot \\
+    --x-tags oci \\
+    --x-startup order=2000
+"
+
+# Prompt to continue if enabled before executing command.
+prompt() {
+  local -a cmd=("$@")
+
+  if [ "${CONFIRM_FLAG}" -eq 1 ]; then
+    if [ $# -gt 0 ]; then
+      echo -e "\n🛆 Command to execute (will cause DATA modifications):\n\n${cmd[*]}\n\n"
+    fi
+    read -r -p "⛑ Continue? [y/N] " response
+    case "${response}" in
+      [yY][eE][sS]|[yY]) ;;  # Match yes or y.
+      *) echo "🛆 Aborted by user." >&2; exit 1 ;;
+    esac
+  fi
+
+  "${cmd[@]}"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     create) CREATE_FLAG=1; shift ;;
-    upgrade) UPGRADE_FLAG=1; shift ;;
+    migrate) MIGRATE_FLAG=1; shift ;;
+    examples) EXAMPLES_FLAG=1; shift ;;
     -h|--help) echo "${USAGE}"; exit 0 ;;
 
-    -s|--storage) STORAGE="${2}"; shift 2 ;;
     -n|--node) NODE="${2}"; shift 2 ;;
-    --enable-ha) HA_FLAG=1; shift ;;
-    --no-root) NO_ROOT_FLAG=1; shift ;;
+    -eh|--enable-ha) HA_FLAG=1; shift ;;
+    -ns|--no-start) NO_START_FLAG=1; shift ;;
+    -nr|--no-root) NO_ROOT_FLAG=1; shift ;;
+    -c|--confirm) CONFIRM_FLAG=1; shift ;;
 
     -ou|--oci) OCI_URL="${2#*://}"; shift 2 ;;  # Strip protocol scheme.
     -ot|--oci-type) OCI_OS_TYPE="${2}"; shift 2 ;;
-    -ov|--oci-version) OCI_VERSION="${2}"; shift 2;;
+    -ov|--oci-version) OCI_VERSION="${2}"; shift 2 ;;
+    -os|--oci-storage) OCI_STORAGE="${2}"; shift 2 ;;
 
     -i|--id) CT_ID="${2}"; shift 2 ;;
 
     -rs|--rootfs-storage) CT_RFS_STORAGE="${2}"; shift 2 ;;
     -rz|--rootfs-size) CT_RFS_SIZE=${2}; shift 2 ;;
     -ro|--rootfs-opts) CT_RFS_OPTS="${2}"; shift 2 ;;
-    --rootfs-backup) CT_RFS_BACKUP=1; shift;;
 
     -ds|--datafs-storage) CT_DFS_STORAGE="${2}"; shift 2 ;;
-    -dn|--datafs-node) CT_DFS_NODE=${2}; shift 2 ;;
+    -dp|--datafs-mp) CT_DFS_MP=${2}; shift 2 ;;
     -dz|--datafs-size) CT_DFS_SIZE=${2}; shift 2 ;;
-    -dm|--datafs-mount) CT_DFS_MP="${2}"; shift 2 ;;
+    -dm|--datafs-mount) CT_DFS_MOUNT="${2}"; shift 2 ;;
     -do|--datafs-opts) CT_DFS_OPTS="${2}"; shift 2 ;;
-    --datafs-backup) CT_DFS_BACKUP=1; shift ;;
+    -db|--datafs-backup) CT_DFS_BACKUP=1; shift ;;
 
-    -nn|--x-net-name) CT_NET_NAME="${2}"; shift 2;;
-    -nt|--x-net-type) CT_NET_TYPE="${2}"; shift 2;;
-    -nb|--x-net-bridge) CT_NET_BRIDGE="${2}"; shift 2;;
-    -ni|--x-net-ip) CT_NET_IP="${2}"; shift 2;;
-    -ng|--x-net-gw) CT_NET_GW="${2}"; shift 2;;
-    --x-net-firewall) CT_NET_FIREWALL=1; shift ;;
-    -nh|--x-net-hwaddr) CT_NET_HWADDR="${2}"; shift 2;;
-    -nv|--x-net-vlan) CT_NET_VLAN="${2}"; shift 2;;
+    -xnn|--x-net-name) CT_NET_NAME="${2}"; shift 2;;
+    -xnt|--x-net-type) CT_NET_TYPE="${2}"; shift 2;;
+    -xnb|--x-net-bridge) CT_NET_BRIDGE="${2}"; shift 2;;
+    -xni|--x-net-ip) CT_NET_IP="${2}"; shift 2;;
+    -xng|--x-net-gw) CT_NET_GW="${2}"; shift 2;;
+    -xfw|--x-net-firewall) CT_NET_FIREWALL=1; shift ;;
+    -xfr|--x-net-firewall-rule) CT_FW_RULES+=("${2}"); shift 2 ;;
+    -xnh|--x-net-hwaddr) CT_NET_HWADDR="${2}"; shift 2 ;;
+    -xnv|--x-net-vlan) CT_NET_VLAN="${2}"; shift 2;;
 
     -xh|--x-hostname) CT_HOSTNAME="${2}"; shift 2 ;;
     -xc|--x-cores) CT_CORES="${2}"; shift 2 ;;
     -xm|--x-mem) CT_MEM="${2}"; shift 2 ;;
     -xs|--x-swap) CT_SWAP="${2}"; shift 2 ;;
-    --x-onboot) CT_ONBOOT=1; shift ;;
+    -xb|--x-onboot) CT_ONBOOT=1; shift ;;
     -xt|--x-tags) CT_TAGS="${2}"; shift 2 ;;
     -xo|--x-startup) CT_STARTUP="${2}"; shift 2 ;;
 
-    *) echo "🛇 Unknown option: $1" >&2; echo "${USAGE}"; exit 1 ;;
+    *) echo "🛇 Unknown option: $1" >&2; exit 1 ;;
   esac
 done
+
+if [ "${EXAMPLES_FLAG}" -eq 1 ]; then
+  echo "${EXAMPLES}." >&2; exit 0
+fi
 
 if [ "${NO_ROOT_FLAG}" -ne 1 ] && [ "${EUID:-$(id -u)}" -ne 0 ]; then
   echo "🛇 must be run as root." >&2; exit 1
 fi
 
-if [ "${CREATE_FLAG}" -eq 0 ] || [ "${UPGRADE_FLAG}" -eq 0]; then
-  echo "🛇 create or upgrade required."; exit 1
+if [ "${CREATE_FLAG}" -eq 0 ] && [ "${MIGRATE_FLAG}" -eq 0 ]; then
+  echo "🛇 create or migrate required."; echo "${USAGE}"; exit 1
 fi
 
 if [ -z "${CT_ID}" ]; then
-  echo "🛇 container ID required."; exit 1
+  echo "🛇 container ID required."; echo "${USAGE}"; exit 1
 fi
 
 if [ -z "${OCI_URL}" ]; then
-  echo "🛇 OCI source URL required."; exit 1
+  echo "🛇 OCI source URL required."; echo "${USAGE}"; exit 1
 fi
 
-echo "🛈 Check OCI image..."
+echo -n "🛈 Resolving available container ID... "
+CT_SOURCE_ID=${CT_ID}
+while pct status "${CT_ID}" &>/dev/null || [ -f "/etc/pve/lxc/${CT_ID}.conf" ]; do
+  CT_ID=$((CT_ID + 1))
+done
+echo "${CT_ID}"
+
+echo "🛈 Check OCI image"
 IMAGE_REF="${OCI_URL}:${OCI_VERSION}"
 OCI_BASENAME="${OCI_URL##*/}"
 OCI_FILE="${OCI_BASENAME}_${OCI_VERSION}.tar"
-OCI_NAME="${STORAGE}:vztmpl/${OCI_FILE}"
+OCI_NAME="${OCI_STORAGE}:vztmpl/${OCI_FILE}"
 OCI_PATH="$(pvesm path "${OCI_NAME}" 2>/dev/null || true)"
 
 if [ -z "${OCI_PATH}" ] || [ ! -f "${OCI_PATH}" ]; then
-  echo "🛈 Pulling OCI image: ${IMAGE_REF} ➔ ${STORAGE}..."
-  pvesh create "/nodes/${NODE}/storage/${STORAGE}/oci-registry-pull" \
+  echo "➔ Pulling OCI image: ${IMAGE_REF} ➔ ${OCI_STORAGE}"
+  pvesh create "/nodes/${NODE}/storage/${OCI_STORAGE}/oci-registry-pull" \
     --reference "${IMAGE_REF}"
 else
-  echo "🛈 Detected: ${OCI_FILE}"
+  echo "➔ Detected: ${OCI_FILE}"
 fi
 
 # RootFS.
 PCT_RFS_OPTS="${CT_RFS_STORAGE}:${CT_RFS_SIZE}"
 [ -n "${CT_RFS_OPTS}" ]   && PCT_RFS_OPTS+=",mountoptions=${CT_RFS_OPTS}"
-[ -n "${CT_RFS_BACKUP}" ] && PCT_RFS_OPTS+=",backup=${CT_RFS_BACKUP}"
 
 # Network.
+[ ${#CT_FW_RULES[@]} -gt 0 ] && CT_NET_FIREWALL=1
 PCT_NET="name=${CT_NET_NAME},bridge=${CT_NET_BRIDGE}"
-[ -n "${CT_NET_TYPE}" ]     && PCT_NET+=",type=${CT_NET_TYPE}"
-[ -n "${CT_NET_IP}" ]       && PCT_NET+=",ip=${CT_NET_IP}"
-[ -n "${CT_NET_GW}" ]       && PCT_NET+=",gw=${CT_NET_GW}"
-[ -n "${CT_NET_FIREWALL}" ] && PCT_NET+=",firewall=${CT_NET_FIREWALL}"
-[ -n "${CT_NET_HWADDR}" ]   && PCT_NET+=",hwaddr=${CT_NET_HWADDR}"
-[ -n "${CT_NET_VLAN}" ]      && PCT_NET+=",tag=${CT_NET_VLAN}"
+[ -n "${CT_NET_TYPE}" ]         && PCT_NET+=",type=${CT_NET_TYPE}"
+[ -n "${CT_NET_IP}" ]           && PCT_NET+=",ip=${CT_NET_IP}"
+[ -n "${CT_NET_GW}" ]           && PCT_NET+=",gw=${CT_NET_GW}"
+[ -n "${CT_NET_FIREWALL}" ]     && PCT_NET+=",firewall=${CT_NET_FIREWALL}"
+[ -n "${CT_NET_HWADDR}" ]       && PCT_NET+=",hwaddr=${CT_NET_HWADDR}"
+[ -n "${CT_NET_VLAN}" ]         && PCT_NET+=",tag=${CT_NET_VLAN}"
 
 # Required options.
 PCT_OPTIONS=(
@@ -280,75 +365,106 @@ PCT_OPTIONS=(
 [ -n "${CT_STARTUP}" ] && PCT_OPTIONS+=(--startup "${CT_STARTUP}")
 
 if [ "${CREATE_FLAG}" -eq 1 ]; then
-  if { [ -f "/etc/pve/lxc/${CT_ID}.conf" ] || pct status "${CT_ID}" &>/dev/null; }; then
-    echo "🛇 Container ${CT_ID} already exists."; exit 3
-  fi
-
   # Create new data disk.
   if [ "${CT_DFS_SIZE}" -ne 0 ]; then
-      PCT_DATA="${CT_DFS_STORAGE}:${CT_DFS_SIZE},mp=${CT_DFS_MP}"
+      PCT_DATA="${CT_DFS_STORAGE}:${CT_DFS_SIZE},mp=${CT_DFS_MOUNT}"
       [ -n "${CT_DFS_OPTS}" ] && PCT_DATA+=",mountoptions=${CT_DFS_OPTS}"
       [ -n "${CT_DFS_BACKUP}" ] && PCT_DATA+=",backup=${CT_DFS_BACKUP}"
-      PCT_OPTIONS+=(--mp${CT_DFS_NODE} "${PCT_DATA}")
+      PCT_OPTIONS+=(--mp${CT_DFS_MP} "${PCT_DATA}")
   fi
 
-  echo "🛈 Create ${CT_ID}..."
-  pct create "${CT_ID}" "${OCI_NAME}" "${PCT_OPTIONS[@]}"
+  echo "🛈 Create ${CT_ID}"
+  prompt pct create "${CT_ID}" "${OCI_NAME}" "${PCT_OPTIONS[@]}"
 fi
 
-# Upgrade via cloning existing container, re-create container with new version
-# and migrate mount points to new container. Remove clone when finished.
-if [ "${UPGRADE_FLAG}" -eq 1 ]; then
-  if ! { [ -f "/etc/pve/lxc/${CT_ID}.conf" ] || pct status "${CT_ID}" &>/dev/null; }; then
-    echo "🛇 Container ${CT_ID} does not exist."; exit 3
+# Create new container with updated OCI version, migrating existing mounts into
+# it. Remove original container when finished.
+if [ "${MIGRATE_FLAG}" -eq 1 ]; then
+echo "🛈 Migrate ${CT_SOURCE_ID}"
+  if ! { [ -f "/etc/pve/lxc/${CT_SOURCE_ID}.conf" ] || pct status "${CT_SOURCE_ID}" &>/dev/null; }; then
+    echo "🛇 Container ${CT_SOURCE_ID} does not exist."; exit 3
   fi
 
   if ha-manager status | grep -q "ct:${CT_ID}"; then
-      echo "🛈 Setting ${CT_ID} HA state to stopped..."
-      ha-manager set "ct:${CT_ID}" --state stopped
+      echo "➔ Set HA:${CT_SOURCE_ID} state=stopped"
+      ha-manager set "ct:${CT_SOURCE_ID}" --state stopped
 
-      echo "🛈 Waiting for container to stop..."
-      while pct status "${CT_ID}" 2>/dev/null | grep -q "status: running"; do
+      echo "➔ Waiting for container to stop..."
+      while pct status "${CT_SOURCE_ID}" 2>/dev/null | grep -q "status: running"; do
         sleep 2
       done
-  elif pct status "${CT_ID}" 2>/dev/null | grep -q "status: running"; then
-      echo "🛈 Stopping ${CT_ID}..."
-      pct stop "${CT_ID}"
+  elif pct status "${CT_SOURCE_ID}" 2>/dev/null | grep -q "status: running"; then
+      echo "➔ Stopping ${CT_SOURCE_ID}..."
+      pct stop "${CT_SOURCE_ID}"
   fi
 
-  NEW_CT_ID="${CT_ID}"
-  while pct status "${NEW_CT_ID}" &>/dev/null || [ -f "/etc/pve/lxc/${NEW_CT_ID}.conf" ]; do
-    NEW_CT_ID=$((NEW_CT_ID + 1))
-  done
-  echo "🛈 Clone ${NEW_CT_ID} ➔ ${NEW_CT_ID}..."
-  pct clone "${CT_ID}" "${NEW_CT_ID}"
-  CLONE_CONFIG=$(pct config "${NEW_CT_ID}" 2>/dev/null || true)
+  echo "➔ Create ${CT_ID}"
+  prompt pct create "${CT_ID}" "${OCI_NAME}" "${PCT_OPTIONS[@]}"
 
-  echo "🛈 Destroy ${CT_ID}..."
-  if ha-manager status | grep -q "ct:${CT_ID}"; then
-    ha-manager rm "ct:${CT_ID}" || true
-  fi
-  pct destroy "${CT_ID}" --purge 1 || pct destroy "${CT_ID}"
-
-  echo "🛈 Create ${CT_ID}..."
-  pct create "${CT_ID}" "${TEMPLATE_NAME}" "${PCT_OPTIONS[@]}"
-
+  echo "➔ Clone ${CT_SOURCE_ID} ➔ ${CT_ID}"
+  CLONE_CONFIG=$(pct config "${CT_SOURCE_ID}" 2>/dev/null | tr -d '\0' || true)
   echo "${CLONE_CONFIG}" | grep -E '^mp[0-9]+:' | while read -r mp_line; do
     mp_key=$(echo "${mp_line}" | cut -d':' -f1)
     if [ -n "${mp_key}" ]; then
-      echo "🛈 Migrate ${NEW_CT_ID}:${mp_key} ➔ ${CT_ID}:${mp_key}..."
-      pct move-volume "${NEW_CT_ID}" "${mp_key}" --target-vmid "${CT_ID}" --target-volume "${mp_key}"
+      echo "➔ Migrate ${CT_SOURCE_ID}:${mp_key} ➔ ${CT_ID}:${mp_key}"
+      pct move-volume "${CT_SOURCE_ID}" "${mp_key}" --target-vmid "${CT_ID}" --target-volume "${mp_key}"
     fi
   done
 
-  echo "🛈 Destroy ${NEW_CT_ID}..."
-  pct destroy "${NEW_CT_ID}" --purge 1 || pct destroy "${NEW_CT_ID}"
+  echo "➔ Destroy ${CT_SOURCE_ID}"
+  if ha-manager status | grep -q "ct:${CT_SOURCE_ID}"; then
+    ha-manager remove "ct:${CT_SOURCE_ID}" || true
+  fi
+  prompt pct destroy "${CT_SOURCE_ID}" --purge 1 || pct destroy "${CT_ID}"
 fi
 
-if [ "${HA_FLAG}" -eq 1 ]; then
-  echo "🛈 Starting container ${CT_ID} with Proxmox High Availability (HA)..."
-  ha-manager add "ct:${CT_ID}" --state started
+# Configure container firewall rules.
+if [ ${#CT_FW_RULES[@]} -gt 0 ]; then
+  echo "🛈 Add firwall rules ${CT_ID}"
+  pvesh set "/nodes/${NODE}/lxc/${CT_ID}/firewall/options" --enable 1
+
+  for rule in "${CT_FW_RULES[@]}"; do
+    IFS=':' read -r dport proto_v source_v log_v comment_v <<< "${rule}"
+    proto="${proto_v:-tcp}"
+    source="${source_v:-}"
+    log="${log_v:-nolog}"
+    comment="${comment_v:-}"
+
+    if [ -z "${dport}" ]; then
+      echo "🛇 Destination port is required for firewall rule: ${rule}" >&2
+      exit 4
+    fi
+
+    echo "➔ Port: ${dport}, Proto: ${proto}, Source: ${source:-any}, Log: ${log}, Comment: ${comment:-}"
+    fw_cmd=(pvesh create "/nodes/${NODE}/lxc/${CT_ID}/firewall/rules" --action ACCEPT --type in --proto "${proto}" --dport "${dport}")
+    [ -n "${source}" ] && fw_cmd+=(--source "${source}")
+    [ -n "${log}" ] && fw_cmd+=(--log "${log}")
+    [ -n "${comment}" ] && fw_cmd+=(--comment "${comment}")
+
+    "${fw_cmd[@]}"
+  done
+fi
+
+if [ "${NO_START_FLAG}" -eq 1 ]; then
+  if [ "${HA_FLAG}" -eq 1 ]; then
+    echo "✔ Set HA:${CT_ID} state=stopped"
+    ha-manager add "ct:${CT_ID}" --state stopped
+    while pct status "${CT_ID}" 2>/dev/null | grep -q "status: running"; do
+      sleep 2
+    done
+  else
+    echo "✔ NOT starting ${CT_ID}"
+  fi
 else
-  echo "🛈 Starting ${CT_ID}..."
-  pct start "${CT_ID}"
+  if [ "${HA_FLAG}" -eq 1 ]; then
+    ha-manager add "ct:${CT_ID}" --state started
+    echo "➔ Waiting for container to start"
+    while ! pct status "${CT_ID}" 2>/dev/null | grep -q "status: running"; do
+      sleep 2
+    done
+    echo "✔ Set HA:${CT_ID} state=started"
+  else
+    echo "✔ Starting ${CT_ID}"
+    pct start "${CT_ID}"
+  fi
 fi

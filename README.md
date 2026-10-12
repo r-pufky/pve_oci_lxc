@@ -1,67 +1,55 @@
 # Proxmox OCI Image LXC Lifecycle Management
 Manage OCI image lifecycle during Proxmox 9.1+ tech preview.
 
+Lifecycle management is current a pain and will likely be vastly improved in
+future PVE releases. This script automates all of my current OCI container use
+cases including automatically migrating mount points to new OCI container
+versions.
+
 ## Requirements
-Configured proxmox cluster. Script should be placed in user's path.
+Configured proxmox cluster. Script should be placed in user path.
+
+## Usage
+
+:warning: Tech Preview
+> Container options for **create** and **migrate** should be the same unless
+> those changes are intentional. Both options create a new container. Parsing
+> existing config deferred as too labor intensive until OCI support is
+> officially released.
 
 ``` bash
-# Create a new Seerr OCI container with a 1G config disk.
-
+# Basic create usage. Create a seerr container with a static IP, firewall, and
+# 1G config disk. Additional mount points can be added after initial creation.
+# Environment options for OCI should be added post creation if needed -- use
+# --no-start.
 oci create \
-  --oci ghcr.io/seerr-team/seerr \
-  --oci-version v3.0.0 \
-  --id 700 \
   --enable-ha \
-  --node pve2 \
-  --rootfs-size 4 \
-  --rootfs-opts discard,noatime \
-  --rooffs-backup \
-  --x-net-name eth0 \
-  --x-net-type veth \
-  --x-net-bridge vmrb0 \
+  --oci ghcr.io/seerr-team/seerr \
+  --oci-version v3.4.0 \
   --x-net-ip 192.168.10.10/24 \
   --x-net-gw 192.168.10.1 \
   --x-net-firewall \
-  --x-net-hwaddr 02:DD:CE:26:9A:1E \
-  --x-net-vlan 5 \
+  --x-net-firewall-rule 5055:tcp::nolog:seerr \
   --x-hostname iseerr \
-  --x-cores 4 \
-  --x-mem 4096 \
-  --x-onboot \
-  --x-tags oci \
-  --x-startup order=2000 \
-  --datafs-storage local-lvm \
   --datafs-size 1 \
-  --datafs-mount 0 \
-  --datafs-opts discard,noatime \
+  --datafs-mount /app/config \
   --datafs-backup
 
-# Migrate Seerr OCI container to new version (container re-created and migrate
-# all mp's to new container).
-
+# Basic migrate usage. Migrate an existing OCI container to a new version. All
+# mount points are automatically migrated to the new container.
 oci migrate \
-  --oci ghcr.io/seerr-team/seerr \
-  --oci-version v3.5.0 \  # New version to use.
-  --id 700 \  # Use existing container ID.
   --enable-ha \
-  --node pve2 \
-  --rootfs-size 4 \
-  --rootfs-opts discard,noatime \
-  --rooffs-backup \
-  --x-net-name eth0 \
-  --x-net-type veth \
-  --x-net-bridge vmrb0 \
+  --oci ghcr.io/seerr-team/seerr \
+  --oci-version v3.5.0 \
   --x-net-ip 192.168.10.10/24 \
   --x-net-gw 192.168.10.1 \
   --x-net-firewall \
-  --x-net-hwaddr 02:DD:CE:26:9A:1E \
-  --x-net-vlan 5 \
-  --x-hostname iseerr \
-  --x-cores 4 \
-  --x-mem 4096 \
-  --x-onboot \
-  --x-tags oci \
-  --x-startup order=2000
+  --x-net-firewall-rule 5055:tcp::nolog:seerr \
+  --x-hostname iseerr
+
+# Most container options are supported. See examples and help.
+oci examples
+oci -h
 ```
 
 ## Issues
