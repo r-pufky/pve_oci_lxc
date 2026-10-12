@@ -333,17 +333,17 @@ fi
 
 # RootFS.
 PCT_RFS_OPTS="${CT_RFS_STORAGE}:${CT_RFS_SIZE}"
-[ -n "${CT_RFS_OPTS}" ]   && PCT_RFS_OPTS+=",mountoptions=${CT_RFS_OPTS}"
+[ -n "${CT_RFS_OPTS}" ] && PCT_RFS_OPTS+=",mountoptions=${CT_RFS_OPTS}"
 
 # Network.
 [ ${#CT_NET_FIREWALL_RULES[@]} -gt 0 ] && CT_NET_FIREWALL=1
 PCT_NET="name=${CT_NET_NAME},bridge=${CT_NET_BRIDGE}"
-[ -n "${CT_NET_TYPE}" ]         && PCT_NET+=",type=${CT_NET_TYPE}"
-[ -n "${CT_NET_IP}" ]           && PCT_NET+=",ip=${CT_NET_IP}"
-[ -n "${CT_NET_GW}" ]           && PCT_NET+=",gw=${CT_NET_GW}"
-[ -n "${CT_NET_FIREWALL}" ]     && PCT_NET+=",firewall=${CT_NET_FIREWALL}"
-[ -n "${CT_NET_HWADDR}" ]       && PCT_NET+=",hwaddr=${CT_NET_HWADDR}"
-[ -n "${CT_NET_VLAN}" ]         && PCT_NET+=",tag=${CT_NET_VLAN}"
+[ -n "${CT_NET_TYPE}" ] && PCT_NET+=",type=${CT_NET_TYPE}"
+[ -n "${CT_NET_IP}" ] && PCT_NET+=",ip=${CT_NET_IP}"
+[ -n "${CT_NET_GW}" ] && PCT_NET+=",gw=${CT_NET_GW}"
+[ -n "${CT_NET_FIREWALL}" ] && PCT_NET+=",firewall=${CT_NET_FIREWALL}"
+[ -n "${CT_NET_HWADDR}" ] && PCT_NET+=",hwaddr=${CT_NET_HWADDR}"
+[ -n "${CT_NET_VLAN}" ] && PCT_NET+=",tag=${CT_NET_VLAN}"
 
 # Required options.
 PCT_OPTIONS=(
@@ -412,7 +412,7 @@ echo "🛈 Migrate ${CT_SOURCE_ID}"
   if ha-manager status | grep -q "ct:${CT_SOURCE_ID}"; then
     ha-manager remove "ct:${CT_SOURCE_ID}" || true
   fi
-  prompt pct destroy "${CT_SOURCE_ID}" --purge 1 || pct destroy "${CT_ID}"
+  prompt pct destroy "${CT_SOURCE_ID}" --purge 1
 fi
 
 # Configure container firewall rules.
