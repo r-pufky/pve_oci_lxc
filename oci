@@ -301,15 +301,15 @@ if [ "${NO_ROOT_FLAG}" -ne 1 ] && [ "${EUID:-$(id -u)}" -ne 0 ]; then
 fi
 
 if [ "${CREATE_FLAG}" -eq 0 ] && [ "${MIGRATE_FLAG}" -eq 0 ]; then
-  echo "🛇 create or migrate required."; echo "${USAGE}"; exit 1
+  echo "🛇 create or migrate required."; exit 1
 fi
 
 if [ -z "${CT_ID}" ]; then
-  echo "🛇 container ID required."; echo "${USAGE}"; exit 1
+  echo "🛇 container ID required."; exit 1
 fi
 
 if [ -z "${OCI_URL}" ]; then
-  echo "🛇 OCI source URL required."; echo "${USAGE}"; exit 1
+  echo "🛇 OCI source URL required."; exit 1
 fi
 
 echo -n "🛈 Resolving available container ID... "
@@ -420,7 +420,7 @@ fi
 
 # Configure container firewall rules.
 if [ ${#CT_FW_RULES[@]} -gt 0 ]; then
-  echo "🛈 Add firwall rules ${CT_ID}"
+  echo "🛈 Add firewall rules ${CT_ID}"
   pvesh set "/nodes/${NODE}/lxc/${CT_ID}/firewall/options" --enable 1
 
   for rule in "${CT_FW_RULES[@]}"; do
@@ -447,24 +447,27 @@ fi
 
 if [ "${NO_START_FLAG}" -eq 1 ]; then
   if [ "${HA_FLAG}" -eq 1 ]; then
-    echo "✔ Set HA:${CT_ID} state=stopped"
     ha-manager add "ct:${CT_ID}" --state stopped
+    echo "🛈 Set HA:${CT_ID} state=stopped"
+    echo "➔ Waiting for container to stop..."
     while pct status "${CT_ID}" 2>/dev/null | grep -q "status: running"; do
       sleep 2
     done
   else
-    echo "✔ NOT starting ${CT_ID}"
+    echo "🛈 NOT starting ${CT_ID}..."
   fi
 else
   if [ "${HA_FLAG}" -eq 1 ]; then
     ha-manager add "ct:${CT_ID}" --state started
-    echo "➔ Waiting for container to start"
+    echo "🛈 Set HA:${CT_ID} state=started"
+    echo "➔ Waiting for container to start..."
     while ! pct status "${CT_ID}" 2>/dev/null | grep -q "status: running"; do
       sleep 2
     done
-    echo "✔ Set HA:${CT_ID} state=started"
   else
-    echo "✔ Starting ${CT_ID}"
+    echo "🛈 Starting ${CT_ID}..."
     pct start "${CT_ID}"
   fi
 fi
+
+echo "✔ Success!"
