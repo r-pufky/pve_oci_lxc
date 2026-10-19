@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION='1.0.1'
+VERSION='1.0.2'
 CREATE_FLAG=0
 MIGRATE_FLAG=0
 EXAMPLES_FLAG=0
@@ -240,6 +240,23 @@ prompt() {
   "${cmd[@]}"
 }
 
+# Get the next available (LXC/KVM) ID starting at ID.
+get_next_ctid() {
+  local next_id="${1:-999}"
+  local existing_ids=$(
+    {
+      ls -1 /etc/pve/nodes/*/lxc/*.conf 2>/dev/null
+      ls -1 /etc/pve/nodes/*/qemu-server/*.conf 2>/dev/null
+    } | sed -E 's/.*\/([0-9]+)\.conf/\1/' \
+      | awk -v start="$next_id" '$1 >= start {print $1}' \
+      | sort -un
+  )
+
+  while echo "${existing_ids}" | grep -qx "${next_id}"; do ((next_id++)); done
+
+  echo "${next_id}"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     create) CREATE_FLAG=1; shift ;;
@@ -315,9 +332,7 @@ fi
 
 echo -n "🛈 Resolving available container ID... "
 CT_SOURCE_ID=${CT_ID}
-while pct status "${CT_ID}" &>/dev/null || [ -f "/etc/pve/lxc/${CT_ID}.conf" ]; do
-  CT_ID=$((CT_ID + 1))
-done
+CT_ID=$(get_next_ctid ${CT_ID})
 echo "${CT_ID}"
 
 echo "🛈 Check OCI image"
@@ -329,10 +344,24 @@ OCI_PATH="$(pvesm path "${OCI_NAME}" 2>/dev/null || true)"
 
 if [ -z "${OCI_PATH}" ] || [ ! -f "${OCI_PATH}" ]; then
   echo "➔ Pulling OCI image: ${IMAGE_REF} ➔ ${OCI_STORAGE}"
-  pvesh create "/nodes/${NODE}/storage/${OCI_STORAGE}/oci-registry-pull" \
-    --reference "${IMAGE_REF}"
+
+  # pvesh runs async making catching errors difficult, run manually.
+  OCI_STORAGE_PATH=$(pvesh get "/storage/${OCI_STORAGE}" --output-format json | grep -o '"path":"[^"]*"' | cut -d'"' -f4)
+  OCI_TEMPLATE_DIR="${OCI_STORAGE_PATH}/template/cache"
+  OCI_SAFE_NAME=$(echo "${IMAGE_REF}" | tr '/' '_' | tr ':' '_')
+  OCI_TEMP_ARCHIVE="${OCI_TEMPLATE_DIR}/${OCI_SAFE_NAME}.tar.tmp.$$"
+  OCI_FINAL_ARCHIVE="${OCI_TEMPLATE_DIR}/${OCI_FILE}"
+  mkdir -p "${OCI_TEMPLATE_DIR}"
+
+  if ! skopeo copy "docker://${IMAGE_REF}" "oci-archive:${OCI_TEMP_ARCHIVE}"; then
+    echo "Error: Failed to pull OCI image '${IMAGE_REF}' (Hint: some releases use bare versions). Aborting script." >&2
+    rm -f "${OCI_TEMP_ARCHIVE}"
+    exit 1
+  fi
+
+  mv "${OCI_TEMP_ARCHIVE}" "${OCI_FINAL_ARCHIVE}"
 else
-  echo "➔ Detected: ${OCI_FILE}"
+    echo "➔ Detected: ${OCI_FILE}"
 fi
 
 # RootFS.
